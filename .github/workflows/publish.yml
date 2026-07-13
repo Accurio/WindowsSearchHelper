@@ -1,0 +1,81 @@
+name: Publish to Release and PowerShell Gallery
+
+on:
+  push:
+    tags: [v*]
+
+jobs:
+  build:
+    name: Build
+    permissions:
+      contents: read
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop
+          Install-Module -Name PSScriptAnalyzer -ErrorAction Stop
+
+      - shell: pwsh
+        run: |
+          .\Build.ps1 -ErrorAction Stop
+          Update-ModuleManifest -Path .\publish\WindowsSearchHelper\WindowsSearchHelper.psd1 `
+            -ModuleVersion ($env:GITHUB_REF_NAME -replace '^v', '') `
+            -ReleaseNotes "https://github.com/Accurio/WindowsSearchHelper/releases/tag/$env:GITHUB_REF_NAME" `
+            -ErrorAction Stop
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: module
+          path: publish/WindowsSearchHelper
+
+  publish-to-release:
+    name: Publish to Release
+    permissions:
+      contents: write
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: module
+          path: publish/WindowsSearchHelper-${{ github.ref_name }}
+
+      - shell: pwsh
+        run: |
+          Compress-Archive -Path .\publish\WindowsSearchHelper-${{ github.ref_name }}\ `
+            -DestinationPath .\publish\WindowsSearchHelper-${{ github.ref_name }}.zip `
+            -ErrorAction Stop
+
+      - shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.ref_name }} `
+            .\publish\WindowsSearchHelper-${{ github.ref_name }}.zip `
+            --title "WindowsSearchHelper ${{ github.ref_name }}" --generate-notes
+
+  publish-to-psgallery:
+    name: Publish to PowerShell Gallery
+    permissions:
+      id-token: write
+    needs: build
+    runs-on: windows-latest
+    environment:
+      name: psgallery
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: module
+          path: publish/WindowsSearchHelper
+
+      - shell: pwsh
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+        run: |
+          Publish-Module -Path .\publish\WindowsSearchHelper `
+            -NuGetAPIKey $env:PSGALLERY_API_KEY -Verbose -ErrorAction Stop
